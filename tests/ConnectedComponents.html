@@ -1,0 +1,270 @@
+<!doctype html>
+<html class="no-js" lang="">
+    <head>
+        <meta charset="utf-8">
+        <meta http-equiv="x-ua-compatible" content="ie=edge">
+        <title>ConnectedComponents Demo</title>
+        <meta name="description" content="">
+        <meta name="viewport" content="width=device-width, initial-scale=1">
+    </head>
+    <body>
+        <!--[if lt IE 8]>
+            <p class="browserupgrade">You are using an <strong>outdated</strong> browser. Please <a href="http://browsehappy.com/">upgrade your browser</a> to improve your experience.</p>
+        <![endif]-->
+        <div id="page-wrapper">
+            <h1>ConnectedComponents Demo</h1>
+            <div>
+                <label for="maxWidt">Max. width</label> <input id="maxWidth" type="text" placeholder="640" value="640">
+                <br><br>
+                <label for="maxHeight">Max. height</label> <input id="maxHeight" type="text" placeholder="480" value="480">
+                <br><br>
+                <label for="minPointsLen">Min. number of points per blob</label> <input id="minPointsLen" type="text" placeholder="10" value="10">
+                <br><br>
+                <label for="maxBlobsLen">Max. number of blobs</label> <input id="maxBlobsLen" type="text" placeholder="500" value="500">
+                <br><br>
+                <label for="blurAmount">Amount of blur to apply</label> <input id="blurAmount" type="text" placeholder="0.1" value="0.1">
+                <br><br>
+                <label for="thresholdOffset">Threshold offset to apply</label> <input id="thresholdOffset" type="text" placeholder="90" value="90">
+                <br><br>
+                <input id="mergeRectangles" type="checkbox" checked="checked"> <label for="mergeRectangles">Merge rectangles</label>
+                <br><br>
+                <input id="darkBackground" type="checkbox"> <label for="darkBackground">Has a dark background</label>
+                <br><br>
+                Select an image file:
+                <input type="file" id="fileInput">
+            </div>
+            <div id="status"></div>
+            <div id="fileDisplayArea"></div>
+            <div>
+                <canvas id="canvas" width="0" height="0"></canvas>
+            </div>
+            <div id="segmentedImageArea"></div>
+            <div id="portionsArea"></div>
+            <!--
+            <div id="objects">
+                <h2>What I see in this image</h2>
+                <div id="objectsList"></div>
+            </div>
+            -->
+        </div>
+        <script src="https://code.createjs.com/easeljs-0.8.1.min.js"></script>
+        <script src="http://code.jquery.com/jquery-2.1.4.min.js"></script>
+        <script src="../Utils.js"></script>
+        <script src="../ConnectedComponents.js"></script>
+        <script>
+            var blurAmount ,thresholdOffset, mergeRectangles, maxWidth, maxHeight;
+            var img, file, canvas, ctx, srcCanvas, srcCtx;
+            var utils = new ImageUtils();
+            var imageType = /image.*/;
+
+            window.onload = function() {
+                var fileInput = document.getElementById('fileInput');
+                var fileDisplayArea = document.getElementById('fileDisplayArea');
+
+                fileInput.addEventListener('change', function(e) {
+                    showStatus('Processing...');
+
+                    blurAmount      = $('#blurAmount').val() != '' ? parseFloat( $('#blurAmount').val() ) : 0.1;
+                    thresholdOffset = $('#thresholdOffset').val() != '' ? $('#thresholdOffset').val() : 90;
+                    mergeRectangles = $('#mergeRectangles').is(':checked');
+                    maxWidth        = $('#maxWidth').val();
+                    maxHeight       = $('#maxHeight').val();
+
+                    console.log('blur amount: ' + blurAmount);
+                    console.log('threshold offset: ' + thresholdOffset);
+                    console.log('merge rectangles: ' + mergeRectangles);
+
+                    file = fileInput.files[0];
+                    if (file.type.match(imageType)) {
+                        var reader = new FileReader();
+                        reader.onload = function(e) {
+                            fileDisplayArea.innerHTML = "";
+                            img = new Image();
+                            img.src = reader.result;
+
+                            var oWidth  = img.width;
+                            var oHeight = img.height;
+                            var scale   = Math.min(oWidth / maxWidth, oHeight / maxHeight);
+                            var width   = oWidth > maxWidth ? oWidth / scale : oWidth;
+                            var height  = oHeight > maxHeight ? oHeight / scale : oHeight;
+                            img.width   = width;
+                            img.height  = height;
+
+                            console.log('width: ' + width);
+                            console.log('height: ' + height);
+
+                            fileDisplayArea.appendChild(img);
+
+                            srcCanvas           = document.createElement('canvas');
+                            srcCanvas.width     = width;
+                            srcCanvas.height    = height
+                            srcCtx              = srcCanvas.getContext('2d');
+                            srcCtx.drawImage(img, 0, 0, oWidth, oHeight, 0, 0, img.width, img.height);
+
+                            canvas              = document.getElementById('canvas');
+                            canvas.width        = width;
+                            canvas.height       = height
+                            ctx                 = canvas.getContext('2d');
+                            ctx.drawImage(img, 0, 0, oWidth, oHeight, 0, 0, img.width, img.height);
+
+                            var imageData       = ctx.getImageData(0, 0, canvas.width, canvas.height);
+                            imageData           = utils.blur(imageData, blurAmount);
+                            imageData           = utils.threshold(imageData, thresholdOffset);
+                            ctx.putImageData(imageData, 0, 0);
+
+                            initSegmentation(imageData);
+                        }
+                        reader.readAsDataURL(file);
+                    } else {
+                        showStatus('File not supported!');
+                    }
+                });
+            }
+            function showStatus(msg) {
+                $('#status').text(msg);
+            }
+        </script>
+        <script>
+            var xOffset = 0;
+            var yOffset = 0;
+            var objects = [];
+            var rects = [];
+            var filteredRects = [];
+
+            function initSegmentation(imageData) {
+                var sessId = 'sample';
+                var images = {};
+                var count = -1;
+
+                var cc          = new ConnectedComponents();
+                cc.foreground   = $('#darkBackground').is(':checked') ? 1 : 0;
+                cc.minPointsLen = $('#minPointsLen').val() != '' ? parseInt($('#minPointsLen').val()) : 10;
+                cc.maxBlobsLen  = $('#maxBlobsLen').val() != '' ? parseInt($('#maxBlobsLen').val()) : 500;
+
+                cc.segmentation(sessId, imageData, function onBlob(data) {
+                    console.log('blob received');
+                    console.log(data);
+
+                    var bbox = data.bbox;
+
+                    if (bbox.width == 0 || bbox.height == 0)
+                        return;
+
+                    var rect = new createjs.Rectangle(bbox.x, bbox.y, bbox.width, bbox.height);
+                    if (rects.length > 0) {
+                        for (var i=0,len=rects.length; i<len; i++) {
+                            if (rects[i].intersects(rect)) {
+                                rects[i] = rects[i].union(rect);
+                                return;
+                            }
+                        }
+                        rects[rects.length] = rect;
+                    } else {
+                        rects[rects.length] = rect;
+                    }
+                }, function onEnd() {
+                    var segmentedCanvas = document.createElement('canvas');
+                    segmentedCanvas.width = cc.sourceImageData.width;
+                    segmentedCanvas.height = cc.sourceImageData.height;
+
+                    var segmentedCtx = segmentedCanvas.getContext('2d');
+                    segmentedCtx.putImageData(cc.sourceImageData, 0, 0);
+
+                    var img = document.createElement('img');
+                    img.src = segmentedCanvas.toDataURL('image/png');
+                    document.getElementById('segmentedImageArea').appendChild(img);
+
+                    filteredRects = mergeRectangles ? doMergeRectangles(rects) : rects;
+
+                    for (var i=0,len=filteredRects.length; i<len; i++) {
+                        var bbox = filteredRects[i];
+
+                        ctx.rect(bbox.x, bbox.y, bbox.width, bbox.height);
+                        ctx.stroke();
+
+                        var portionImageData = srcCtx.getImageData(bbox.x-xOffset, bbox.y-yOffset, bbox.width+xOffset, bbox.height+yOffset);
+                        var tmpCanvas = document.createElement('canvas');
+                        tmpCanvas.width = portionImageData.width;
+                        tmpCanvas.height = portionImageData.height;
+
+                        var tmpCtx = tmpCanvas.getContext('2d');
+                        tmpCtx.putImageData(portionImageData, 0, 0);
+
+                        var img = document.createElement('img');
+                        img.src = tmpCanvas.toDataURL('image/png');
+                        images[++count] = img.src;
+                        document.getElementById('portionsArea').appendChild(img);
+                    }
+
+                    showStatus('The image has been processed.');
+
+                    //console.log('Sending images for analysis')
+                    //sendImages(images);
+                });
+            }
+            function doMergeRectangles(array) {
+                var merged = false;
+                for (var i in array) {
+                    var i = parseInt(i);
+                    var rectA = array[i];
+                    for (var j in array) {
+                        var j = parseInt(j);
+                        if (j > i) {
+                            var rectB = array[j];
+                            if (rectA.intersects(rectB)) {
+                                array[i] = rectA.union(rectB);
+                                array.splice(j, 1);
+                                merged = true;
+                            }
+                        }
+                    }
+                }
+                return !merged ? array : doMergeRectangles(array);
+            }
+            /*
+            function sendImages(images) {
+                console.log('sending images')
+                var start = new Date().getTime()
+                $.ajax({
+                    type: 'POST',
+                    url: 'http://localhost:3000/api/v1/classify',
+                    data: images,
+                    success: function(res, status, jqXHR) {
+                        var end = new Date().getTime();
+                        var millis = (end - start);
+                        var duration = (millis/1000);
+                        console.log('Duration(seconds): ' + duration);
+                        console.log(res);
+                        analyzeResult(res);
+                    },
+                    error: function (res, status, err) {
+                        console.log('POST failed. ' + JSON.stringify(res) + " status: " + status + " Error: " + err);
+                    }
+                });
+            }
+            function analyzeResult(res) {
+                var confidenceThreshold = 0.04;
+                for (var i in res) {
+                    var img = res[i];
+                    for (var j in img) {
+                        var confidence = parseFloat(img[j][1])
+                        if (objects.indexOf(img[j]) == -1 && confidence >= confidenceThreshold) {
+                            objects.push(img[j][0]);
+                        }
+                    }
+                }
+                console.log('====Analysis result====');
+                console.log('[Objects]');
+                console.log(objects);
+                output();
+            }
+            function output() {
+                var objectsContainer = $('#objectsList');
+                for (var i in objects) {
+                    objectsContainer.append(objects[i])
+                }
+            }
+            */
+        </script>
+    </body>
+</html>
